@@ -1,0 +1,13 @@
+# ⚡ Render Blueprint — 一键部署到 Render
+# 访问 https://render.com  →  New Blueprint  →  选择本仓库
+services:
+  - type: web
+    name: watermark-remover
+    runtime: docker
+    repo: https://github.com/chenfl1992/watermark-remover
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"

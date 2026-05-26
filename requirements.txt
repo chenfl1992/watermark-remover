@@ -1,0 +1,7 @@
+# 批量图片去水印工具 — Batch Image Watermark Remover
+#
+# 核心依赖（均纯本地，无需联网）
+opencv-python-headless>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
+tqdm>=4.60.0
