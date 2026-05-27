@@ -83,9 +83,16 @@ input[type=range]{width:100%;margin:4px 0}
 .btn-secondary{background:#e0e0e0;color:#333}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn-group{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
-.img-box{background:#fafafa;border:1px solid #eee;border-radius:8px;min-height:200px;display:flex;align-items:center;justify-content:center;overflow:hidden;margin-top:8px}
-.img-box img{max-width:100%;max-height:350px;display:block}
+.img-box{background:#fafafa;border:1px solid #eee;border-radius:8px;min-height:200px;display:flex;align-items:center;justify-content:center;overflow:hidden;margin-top:8px;position:relative}
+.img-box img{max-width:100%;max-height:350px;display:block;touch-action:none;user-select:none;-webkit-user-select:none}
 .img-box .placeholder{color:#aaa;font-size:.85rem}
+.img-box canvas{position:absolute;top:0;left:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
+.roi-canvas-wrapper{position:relative;display:inline-block;max-width:100%}
+.roi-coords{padding:4px 0;font-size:.8rem;color:#4f46e5;font-weight:500}
+.roi-hint{display:none;color:#888;font-size:.75rem;margin-bottom:4px;text-align:center}
+.mode-manual-active .roi-hint{display:block}
+.touch-preview{position:absolute;border:2px solid #4f46e5;background:rgba(79,70,229,.15);pointer-events:none;display:none}
+.touch-preview .roi-label{position:absolute;bottom:-18px;left:2px;font-size:.7rem;color:#4f46e5;white-space:nowrap;font-weight:600}
 .status{margin-top:8px;padding:8px 12px;border-radius:6px;font-size:.85rem}
 .status-ok{background:#dcfce7;color:#166534}
 .status-err{background:#fee2e2;color:#991b1b}
@@ -120,7 +127,11 @@ progress::-webkit-progress-value{background:#4f46e5;border-radius:4px}
 <h2>📷 上传图片</h2>
 <input type="file" id="inputImage" accept="image/*" onchange="loadImage(event)">
 <div class="img-box" id="inputBox">
-  <span class="placeholder">选择图片后预览</span>
+  <span class="placeholder">选择图片后，切换到<span style="font-weight:600">手动区域</span>模式可在图上拖拽框选</span>
+  <div class="touch-preview" id="touchPreview">
+    <span class="roi-label" id="roiLabel"></span>
+  </div>
+  <canvas id="roiCanvas"></canvas>
 </div>
 </div>
 <div class="card">
@@ -142,11 +153,12 @@ progress::-webkit-progress-value{background:#4f46e5;border-radius:4px}
 <label><input type="checkbox" id="darkMode"> 深色水印（白底黑字）</label>
 </div>
 <div class="mode-group hidden" id="manualGroup">
+<div class="roi-hint">👆 在图片上拖拽框选水印区域</div>
 <label>ROI (x, y, width, height)</label>
-<div class="row"><div class="half"><label>X</label><input type="number" id="roiX" value="0"></div>
-<div class="half"><label>Y</label><input type="number" id="roiY" value="0"></div></div>
-<div class="row"><div class="half"><label>W</label><input type="number" id="roiW" value="200"></div>
-<div class="half"><label>H</label><input type="number" id="roiH" value="100"></div></div>
+<div class="row"><div class="half"><label>X</label><input type="number" id="roiX" value="0" oninput="showROI()"></div>
+<div class="half"><label>Y</label><input type="number" id="roiY" value="0" oninput="showROI()"></div></div>
+<div class="row"><div class="half"><label>W</label><input type="number" id="roiW" value="200" oninput="showROI()"></div>
+<div class="half"><label>H</label><input type="number" id="roiH" value="100" oninput="showROI()"></div></div>
 </div>
 <div class="mode-group hidden" id="positionGroup">
 <label>位置</label>
@@ -207,6 +219,9 @@ progress::-webkit-progress-value{background:#4f46e5;border-radius:4px}
 
 <script>
 let currentImage = null;
+let roiStart = null;
+let roiEnd = null;
+let isDragging = false;
 
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -220,6 +235,9 @@ function updateMode() {
   document.getElementById('colorGroup').className = 'mode-group' + (mode === 'color' ? '' : ' hidden');
   document.getElementById('manualGroup').className = 'mode-group' + (mode === 'manual' ? '' : ' hidden');
   document.getElementById('positionGroup').className = 'mode-group' + (mode === 'position' ? '' : ' hidden');
+  document.body.classList.toggle('mode-manual-active', mode === 'manual');
+  if (mode === 'manual' && currentImage) showROI();
+  else hideROI();
 }
 
 function loadImage(event) {
@@ -228,9 +246,159 @@ function loadImage(event) {
   const reader = new FileReader();
   reader.onload = function(e) {
     currentImage = e.target.result.split(',')[1];
-    document.getElementById('inputBox').innerHTML = `<img src="${e.target.result}">`;
+    const box = document.getElementById('inputBox');
+    box.innerHTML = `<img src="${e.target.result}" id="previewImg">
+      <div class="touch-preview" id="touchPreview"><span class="roi-label" id="roiLabel"></span></div>
+      <canvas id="roiCanvas"></canvas>`;
+    const img = document.getElementById('previewImg');
+    img.onload = function() {
+      setupCanvas();
+      if (document.getElementById('mode').value === 'manual') showROI();
+    };
   };
   reader.readAsDataURL(file);
+}
+
+function setupCanvas() {
+  const img = document.getElementById('previewImg');
+  const canvas = document.getElementById('roiCanvas');
+  if (!img || !canvas) return;
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  canvas.style.width = img.offsetWidth + 'px';
+  canvas.style.height = img.offsetHeight + 'px';
+
+  // Mouse events
+  canvas.onmousedown = function(e) { startDrag(e.offsetX, e.offsetY); };
+  canvas.onmousemove = function(e) { if (isDragging) moveDrag(e.offsetX, e.offsetY); };
+  canvas.onmouseup = function() { endDrag(); };
+  canvas.onmouseleave = function() { if (isDragging) endDrag(); };
+
+  // Touch events
+  canvas.addEventListener('touchstart', function(e) {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const t = e.touches[0];
+    const x = (t.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (t.clientY - rect.top) * (canvas.height / rect.height);
+    startDrag(x, y);
+  }, {passive: false});
+
+  canvas.addEventListener('touchmove', function(e) {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const t = e.touches[0];
+    const x = (t.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (t.clientY - rect.top) * (canvas.height / rect.height);
+    moveDrag(x, y);
+  }, {passive: false});
+
+  canvas.addEventListener('touchend', function(e) {
+    e.preventDefault();
+    endDrag();
+  }, {passive: false});
+}
+
+function startDrag(x, y) {
+  if (document.getElementById('mode').value !== 'manual') return;
+  isDragging = true;
+  roiStart = {x, y};
+  roiEnd = null;
+}
+
+function moveDrag(x, y) {
+  if (!isDragging) return;
+  roiEnd = {x, y};
+  drawSelection();
+}
+
+function endDrag() {
+  if (!isDragging || !roiStart || !roiEnd) {
+    isDragging = false;
+    return;
+  }
+  isDragging = false;
+  const x1 = Math.round(Math.min(roiStart.x, roiEnd.x));
+  const y1 = Math.round(Math.min(roiStart.y, roiEnd.y));
+  const x2 = Math.round(Math.max(roiStart.x, roiEnd.x));
+  const y2 = Math.round(Math.max(roiStart.y, roiEnd.y));
+  const w = x2 - x1;
+  const h = y2 - y1;
+  if (w < 5 || h < 5) return;
+
+  document.getElementById('roiX').value = x1;
+  document.getElementById('roiY').value = y1;
+  document.getElementById('roiW').value = w;
+  document.getElementById('roiH').value = h;
+  updateROILabel(x1, y1, w, h);
+}
+
+function drawSelection() {
+  const canvas = document.getElementById('roiCanvas');
+  const img = document.getElementById('previewImg');
+  if (!canvas || !img) return;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const x1 = Math.min(roiStart.x, roiEnd.x);
+  const y1 = Math.min(roiStart.y, roiEnd.y);
+  const w = Math.abs(roiEnd.x - roiStart.x);
+  const h = Math.abs(roiEnd.y - roiStart.y);
+
+  ctx.fillStyle = 'rgba(79, 70, 229, 0.15)';
+  ctx.fillRect(x1, y1, w, h);
+  ctx.strokeStyle = '#4f46e5';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x1, y1, w, h);
+
+  // Corner handles for visual feedback
+  const s = 6;
+  ctx.fillStyle = '#4f46e5';
+  ctx.fillRect(x1 - s/2, y1 - s/2, s, s);
+  ctx.fillRect(x1 + w - s/2, y1 - s/2, s, s);
+  ctx.fillRect(x1 - s/2, y1 + h - s/2, s, s);
+  ctx.fillRect(x1 + w - s/2, y1 + h - s/2, s, s);
+
+  // Size label
+  ctx.fillStyle = '#4f46e5';
+  ctx.font = 'bold 13px sans-serif';
+  ctx.fillText(`${Math.round(w)}×${Math.round(h)}`, x1 + 4, y1 - 6);
+  updateROILabel(Math.round(x1), Math.round(y1), Math.round(w), Math.round(h));
+}
+
+function showROI() {
+  const canvas = document.getElementById('roiCanvas');
+  const img = document.getElementById('previewImg');
+  if (!canvas || !img) return;
+  const x = parseInt(document.getElementById('roiX').value);
+  const y = parseInt(document.getElementById('roiY').value);
+  const w = parseInt(document.getElementById('roiW').value);
+  const h = parseInt(document.getElementById('roiH').value);
+  if (w < 1 || h < 1) return;
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = 'rgba(79, 70, 229, 0.15)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = '#4f46e5';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+  updateROILabel(x, y, w, h);
+}
+
+function hideROI() {
+  const canvas = document.getElementById('roiCanvas');
+  if (canvas) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+  const label = document.getElementById('roiLabel');
+  if (label) label.textContent = '';
+}
+
+function updateROILabel(x, y, w, h) {
+  const label = document.getElementById('roiLabel');
+  if (label) label.textContent = `ROI: ${x},${y}  ${w}×${h}`;
 }
 
 function showStatus(id, msg, type) {
