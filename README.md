@@ -57,7 +57,17 @@ python main.py ./images -o ./output --radius 7 --workers 8
 4. 等待 3-5 分钟构建部署完成
 5. 访问 `https://watermark-remover.onrender.com`
 
-### 方式二：Docker 手动部署
+### 方式二：GitHub Container Registry → 任意云平台
+
+工作流已配置好，每次推送 `main` 分支会自动构建 Docker 镜像至 GHCR。
+
+```bash
+docker pull ghcr.io/chenfl1992/watermark-remover:latest
+docker run -p 7860:7860 ghcr.io/chenfl1992/watermark-remover:latest
+# 访问 http://localhost:7860
+```
+
+### 方式三：Docker 手动构建
 
 ```bash
 docker build -t watermark-remover .
@@ -65,7 +75,7 @@ docker run -p 7860:7860 watermark-remover
 # 访问 http://localhost:7860
 ```
 
-### 方式三：Hugging Face Spaces
+### 方式四：Hugging Face Spaces
 
 1. 创建新 Space → 选择 **Docker** 运行时
 2. 导入本仓库
